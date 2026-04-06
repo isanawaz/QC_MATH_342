@@ -1,0 +1,659 @@
+---
+title: "Lab 7"
+author: "Isa Nawaz"
+output: pdf_document
+---
+
+#Polynomial Regression and Interaction Regression
+
+We will work with the diamonds dataset again. Here we load up the dataset and convert all factors to nominal type:
+
+```{r}
+pacman::p_load(ggplot2) #this loads the diamonds data set too
+diamonds = ggplot2::diamonds
+?diamonds
+diamonds$cut =      factor(diamonds$cut, ordered = FALSE)      #convert to nominal
+diamonds$color =    factor(diamonds$color, ordered = FALSE)    #convert to nominal
+diamonds$clarity =  factor(diamonds$clarity, ordered = FALSE)  #convert to nominal
+skimr::skim(diamonds)
+```
+
+Given the information above, what are the number of columns in the raw X matrix?
+
+# 23
+
+Verify this using code:
+
+```{r}
+X = model.matrix(price ~ ., data = diamonds)
+ncol(X) - 1
+```
+
+Would it make sense to use polynomial expansions for the variables cut, color and clarity? Why or why not?
+
+# No, these are nominal categorial values.
+
+Would it make sense to use log transformations for the variables cut, color and clarity? Why or why not?
+
+#No, these are nominal categorial values.
+
+In order to ensure there is no time trend in the data, randomize the order of the diamond observations in D:.
+
+```{r}
+diamonds = diamonds[sample(nrow(diamonds)), ]
+```
+
+Let's also concentrate only on diamonds with <= 2 carats to avoid the issue we saw with the maximum. So subset the dataset. Create a variable n equal to the number of remaining rows as this will be useful for later. Then plot it.
+
+```{r}
+diamonds = diamonds[diamonds$carat <= 2, ]
+n = nrow(diamonds)
+ggplot(diamonds) + geom_point(aes(x = carat, y = price), alpha = 0.1)
+```
+
+Create a linear model of price ~ carat and gauge its in-sample performance using s_e.
+
+```{r}
+summary(lm(price ~ carat, diamonds))$sigma
+```
+
+Create a model of price ~ clarity and gauge its in-sample performance
+
+```{r}
+summary(lm(price ~ clarity, diamonds))$sigma
+```
+
+Why is the model price ~ carat substantially more accurate than price ~ clarity?
+
+# Carat is the size of the diamond and more directly correlates to
+
+Create a new transformed feature ln_carat and plot it vs price.
+
+```{r}
+diamonds$ln_carat = log(diamonds$carat)
+ggplot(diamonds) + geom_point(aes(x = ln_carat, y = price), alpha = 0.1)
+```
+
+Would price ~ ln_carat be a better fitting model than price ~ carat? Why or why not?
+
+# No, price ~ ln_carat is less linear.
+
+Verify this by comparing R^2 and RMSE of the two models:
+
+```{r}
+summary(lm(price ~ carat, diamonds))$r.squared
+summary(lm(price ~ carat, diamonds))$sigma
+
+summary(lm(price ~ ln_carat, diamonds))$r.squared
+summary(lm(price ~ ln_carat, diamonds))$sigma
+```
+
+Create a new transformed feature ln_price and plot its estimated density:
+
+
+```{r}
+diamonds$ln_price = log(diamonds$price)
+ggplot(diamonds) + geom_histogram(aes(x = ln_price), binwidth = 0.01)
+```
+
+
+Now plot it vs carat.
+
+```{r}
+ggplot(diamonds, aes(x = carat, y = ln_price)) + 
+  geom_point()
+```
+
+Would ln_price ~ carat be a better fitting model than price ~ carat? Why or why not?
+
+# Looks more linear but larger errors, so no.
+
+Verify this by computing s_e of this new model. Make sure these metrics can be compared apples-to-apples with the previous.
+
+```{r}
+mod_ln_price = lm(ln_price ~ carat, data = diamonds)
+y_hat = exp(mod_ln_price$fitted.values)
+se = sd(diamonds$price - y_hat)
+se
+```
+
+We just compared in-sample statistics to draw a conclusion on which model has better performance. But in-sample statistics can lie! Why is what we did valid?
+
+# Because we only used carat as our predictor, so low chance of overfitting.
+
+Plot ln_price vs ln_carat.
+
+```{r}
+ggplot(diamonds) + geom_point(aes(x = ln_carat, y = ln_price), alpha = 0.1)
+```
+
+Would ln_price ~ ln_carat be the best fitting model than the previous three we considered? Why or why not?
+
+# Yes, logging both sides reduces variance, creating the most liner model.
+
+Verify this by computing s_e of this new model. Make sure these metrics can be compared apples-to-apples with the previous.
+
+```{r}
+mod_ln_ln = lm(ln_price ~ ln_carat, data = diamonds)
+y_hat = exp(mod_ln_ln$fitted.values)
+se = sd(diamonds$price - y_hat)
+se
+```
+
+Compute b, the OLS slope coefficients for this new model of ln_price ~ ln_carat.
+
+```{r}
+#Model A
+mod_ln_ln = lm(ln_price ~ ln_carat, data = diamonds)
+coef(mod_ln_ln)
+```
+
+Interpret b_1, the estimated slope of ln_carat.
+
+# A 1% increase in carat means a 1.70% increase in price.
+
+Interpret b_0, the estimated intercept.
+
+# This is the predicted ln_price when ln_carat = 0.
+
+Create other features ln_x, ln_y, ln_z, ln_depth, ln_table.
+
+```{r}
+diamonds = diamonds[diamonds$x > 0 & diamonds$y > 0 & diamonds$z > 0, ]
+
+diamonds$ln_x     = log(diamonds$x)
+diamonds$ln_y     = log(diamonds$y)
+diamonds$ln_z     = log(diamonds$z)
+diamonds$ln_depth = log(diamonds$depth)
+diamonds$ln_table = log(diamonds$table)
+```
+
+
+Let's load up the diamonds dataset and compute ln_price (not raw price) and consider it as the prediction target. 
+
+```{r}
+pacman::p_load(ggplot2) #this loads the diamonds data set too
+diamonds = ggplot2::diamonds
+diamonds$cut =      factor(diamonds$cut, ordered = FALSE)      #convert to nominal
+diamonds$color =    factor(diamonds$color, ordered = FALSE)    #convert to nominal
+diamonds$clarity =  factor(diamonds$clarity, ordered = FALSE)  #convert to nominal
+diamonds$ln_carat = log(diamonds$carat)
+diamonds$ln_price = log(diamonds$price)
+```
+
+Create model (A) of ln_price ~ ln_carat.
+
+```{r}
+#Model A
+mod_a = lm(ln_price ~ ln_carat, diamonds)
+summary(mod_a)$sigma
+```
+
+Create a model (B) of ln_price on ln_carat interacted with clarity and compare its performance with the model (A).
+
+```{r}
+#Model B
+mod_b = lm(ln_price ~ ln_carat * clarity, data = diamonds)
+summary(mod_b)$sigma
+```
+
+Which model does better? Why?
+
+# Model B does better because it lets the relationship between size and price change depending on clarity.
+
+Create a model of (C) ln_price on ln_carat interacted with every categorical feature (clarity, cut and color) and compare its performance with model (B)
+
+```{r}
+#Model C
+mod_c = lm(ln_price ~ ln_carat * clarity + ln_carat * cut + ln_carat * color, data = diamonds)
+summary(mod_c)$sigma
+```
+
+Which model does better? Why?
+
+# Model C does better because it lets the relationship between size and price change depending on all three categorical features.
+
+Create a model (D) of ln_price on every continuous feature (logs of carat, x, y, z, depth, table) interacted with every categorical feature (clarity, cut and color) and compare its performance with model (C).
+
+```{r}
+#Model D
+mod_d = lm(ln_price ~ (ln_carat + ln_x + ln_y + ln_z + ln_depth + ln_table) * (clarity + cut + color), data = diamonds)
+
+summary(mod_d)$sigma
+```
+
+Which model does better? Why?
+
+# Model D does better because it includes all log-transformed continuous features interacted with all categorical features.
+
+What is the p of this model D? Compute with code.
+
+```{r}
+length(coef(mod_d)) - 1
+```
+
+Create model (E) which is the same as before except create include the raw features interacted with the categorical features and gauge the performance against (D).
+
+```{r}
+#Model E
+mod_e = lm(ln_price ~ (ln_carat + ln_x + ln_y + ln_z + ln_depth + ln_table + carat + x + y + z + depth + table) * (clarity + cut + color), data = diamonds)
+summary(mod_e)$sigma
+```
+
+Which model does better? Why?
+
+# Model E does better because including the raw features capture new relationships that the log features might miss.
+
+Create model (F) which is the same as before except also include also third degree polynomials of the continuous features interacted with the categorical features and gauge performance against (E). By this time you're getting good with R's formula syntax!
+
+```{r}
+#Model F
+mod_f = lm(ln_price ~ (ln_carat + ln_x + ln_y + ln_z + ln_depth + ln_table + carat + x + y + z + depth + table + I(carat^2) + I(x^2) + I(y^2) + I(z^2) + I(depth^2) + I(table^2) + I(carat^3) + I(x^3) + I(y^3) + I(z^3) + I(depth^3) + I(table^3)) * (clarity + cut + color), data = diamonds)
+
+summary(mod_f)$sigma
+```
+
+Which model does better? Why?
+
+# Model F does better because the polynomial terms capture curved relationships that neither raw nor log features can fully explain on their own.
+
+Can you think of any other way to expand the candidate set curlyH? Discuss.
+
+# Interactions between different continous or categorical functions with each other.
+
+We should probably assess oos performance now. Sample 2,000 diamonds and use these to create a training set of 1,800 random diamonds and a test set of 200 random diamonds. Define K and do this splitting:
+
+```{r}
+n_sample = 2000
+idx = sample(1:nrow(diamonds), n_sample)
+diamonds_sample = diamonds[idx, ]
+
+train_idx = sample(1:n_sample, 1800)
+train = diamonds_sample[train_idx, ]
+test  = diamonds_sample[-train_idx, ]
+
+K = 10
+```
+
+Compute in and out of sample performance for models A-F. Use s_e as the metric (standard error of the residuals). Create a list with keys A, B, ..., F to store these metrics. Remember the performances here will be worse than before since before you're using nearly 52,000 diamonds to build a model and now it's only 1,800! 
+
+```{r}
+models = list(
+  A = lm(ln_price ~ ln_carat, data = train),
+  B = lm(ln_price ~ ln_carat * clarity, data = train),
+  C = lm(ln_price ~ ln_carat * clarity + ln_carat * cut + ln_carat * color, data = train),
+  D = lm(ln_price ~ (ln_carat + ln_x + ln_y + ln_z + ln_depth + ln_table) * (clarity + cut + color), data = train),
+  E = lm(ln_price ~ (ln_carat + ln_x + ln_y + ln_z + ln_depth + ln_table + carat + x + y + z + depth + table) * (clarity + cut + color), data = train),
+  F = lm(ln_price ~ (ln_carat + ln_x + ln_y + ln_z + ln_depth + ln_table + carat + x + y + z + depth + table + I(carat^2) + I(x^2) + I(y^2) + I(z^2) + I(depth^2) + I(table^2) + I(carat^3) + I(x^3) + I(y^3) + I(z^3) + I(depth^3) + I(table^3)) * (clarity + cut + color), data = train)
+)
+
+in_sample_se  = list()
+out_sample_se = list()
+
+for (m in names(models)){
+  in_sample_se[[m]]  = summary(models[[m]])$sigma
+  preds = predict(models[[m]], newdata = test)
+  out_sample_se[[m]] = sd(test$ln_price - preds)
+}
+
+in_sample_se
+out_sample_se
+
+# Used Claude for parts.
+```
+
+You computed oos metrics only on n_* = 200 diamonds. What problem(s) do you expect in these oos metrics?
+
+# Because of the small sample size, the metrics can change drastically with different random splits.
+
+To do the K-fold cross validation we need to get the splits right and crossing is hard. We've developed code for this already in a previous lab.
+
+```{r}
+temp = rnorm(n)
+folds_vec = cut(temp, breaks = quantile(temp, seq(0, 1, length.out = K + 1)), include.lowest = TRUE, labels = FALSE)
+rm(temp)
+head(folds_vec, 200)
+```
+
+Do the K-fold cross validation for model F and compute the overall s_e and s_s_e. 
+
+```{r}
+se_vec = c()
+
+for (k in 1:K){
+  train_k = diamonds_sample[folds_vec[1:nrow(diamonds_sample)] != k, ]
+  test_k  = diamonds_sample[folds_vec[1:nrow(diamonds_sample)] == k, ]
+  
+  mod_f_k = lm(ln_price ~ (ln_carat + ln_x + ln_y + ln_z + ln_depth + ln_table + carat + x + y + z + depth + table + I(carat^2) + I(x^2) + I(y^2) + I(z^2) + I(depth^2) + I(table^2) + I(carat^3) + I(x^3) + I(y^3) + I(z^3) + I(depth^3) + I(table^3)) * (clarity + cut + color), data = train_k)
+  
+  preds = predict(mod_f_k, newdata = test_k)
+  se_vec[k] = sd(test_k$ln_price - preds)
+}
+
+mean(se_vec)
+sd(se_vec)
+
+# Claude help
+```
+
+Does K-fold CV help reduce variance in the oos s_e? Discuss.
+
+# No, the s_s_e is larger than the mean s_e, indicating Model F is too overfit.
+
+Imagine using the entire rest of the dataset besides the 2,000 training observations divvied up into slices of 200. Measure the oos error for each slice on Model F in a vector `s_e_s_F` and compute the `s_s_e_F` and also plot it.
+
+```{r}
+#TO-DO
+diamonds_rest = diamonds[-idx, ]
+n_rest = nrow(diamonds_rest)
+n_slice = 200
+n_slices = floor(n_rest / n_slice)
+
+s_e_s_F = c()
+
+for (i in 1:n_slices){ # Claude help
+  slice = diamonds_rest[((i-1)*n_slice + 1):(i*n_slice), ]
+  preds = predict(models[["F"]], newdata = slice)
+  s_e_s_F[i] = sd(slice$ln_price - preds)
+}
+
+s_s_e_F = sd(s_e_s_F)
+s_s_e_F
+
+ggplot(data.frame(s_e_s_F = s_e_s_F)) + geom_histogram(aes(x = s_e_s_F))
+```
+
+
+#Model Selection with Three Splits: Select from M models
+
+We employ the diamonds dataset and specify M models nested from simple to more complex. We store the models as strings in a list (i.e. a hashset)
+
+```{r}
+?ggplot2::diamonds
+model_formulas = c(
+  "carat",
+  "carat + cut",
+  "carat + cut + color",
+  "carat + cut + color + clarity",
+  "carat + cut + color + clarity + x + y + z",
+  "carat + cut + color + clarity + x + y + z + depth",
+  "carat + cut + color + clarity + x + y + z + depth + table",
+  "carat * (cut + color + clarity) + x + y + z + depth + table",
+  "(carat + x + y + z) * (cut + color + clarity) + depth + table",
+  "(carat + x + y + z + depth + table) * (cut + color + clarity)",
+  "(poly(carat, 2) + x + y + z + depth + table) * (cut + color + clarity)",
+  "(poly(carat, 2) + poly(x, 2) + poly(y, 2) + poly(z, 2) + depth + table) * (cut + color + clarity)",
+  "(poly(carat, 2) + poly(x, 2) + poly(y, 2) + poly(z, 2) + poly(depth, 2) + poly(table, 2)) * (cut + color + clarity)",
+  "(poly(carat, 2) + poly(x, 2) + poly(y, 2) + poly(z, 2) + poly(depth, 2) + poly(table, 2) + log(carat) + log(x) + log(y) + log(z)) * (cut + color + clarity)",
+  "(poly(carat, 2) + poly(x, 2) + poly(y, 2) + poly(z, 2) + poly(depth, 2) + poly(table, 2) + log(carat) + log(x) + log(y) + log(z) + log(depth)) * (cut + color + clarity)",
+  "(poly(carat, 2) + poly(x, 2) + poly(y, 2) + poly(z, 2) + poly(depth, 2) + poly(table, 2) + log(carat) + log(x) + log(y) + log(z) + log(depth) + log(table)) * (cut + color + clarity)",
+  "(poly(carat, 2) + poly(x, 2) + poly(y, 2) + poly(z, 2) + poly(depth, 2) + poly(table, 2) + log(carat) + log(x) + log(y) + log(z) + log(depth) + log(table)) * (cut + color + clarity + poly(carat, 2) + poly(x, 2) + poly(y, 2) + poly(z, 2) + poly(depth, 2) + poly(table, 2) + log(carat) + log(x) + log(y) + log(z) + log(depth) + log(table))"
+)
+model_formulas = paste0("price ~ ", model_formulas)
+M = length(model_formulas)
+```
+
+In order to use the formulas with logs we need to eliminate rows with zeros in those measurements:
+
+```{r}
+diamonds_cleaned = ggplot2::diamonds
+diamonds_cleaned = diamonds_cleaned[
+  diamonds_cleaned$carat > 0 &
+  diamonds_cleaned$x > 0 &
+  diamonds_cleaned$y > 0 &
+  diamonds_cleaned$z > 0 &
+  diamonds_cleaned$depth > 0 &
+  diamonds_cleaned$table > 0, #all columns
+]
+```
+
+Split the data into train, select and test. Each set should have 1/3 of the total data.
+
+```{r}
+n = nrow(diamonds_cleaned)
+set.seed(1)
+train_idx = sample(1 : n, round(n / 3))
+select_idx = sample(setdiff(1 : n, train_idx), round(n / 3))
+test_idx = setdiff(1 : n, c(train_idx, select_idx))
+diamonds_train =  diamonds_cleaned[train_idx, ]
+diamonds_select = diamonds_cleaned[select_idx, ]
+diamonds_test =   diamonds_cleaned[test_idx, ]
+```
+
+Find the oosRMSE on the select set for each model. Save the number of df in each model while you're doing this as we'll need it for later.
+
+```{r}
+oos_se_select = c()
+p_vec = c()
+
+for (m in 1:M){
+  mod = lm(model_formulas[m], data = diamonds_train)
+  preds = predict(mod, newdata = diamonds_select)
+  oos_se_select[m] = sd(diamonds_select$price - preds)
+  p_vec[m] = length(coef(mod))
+}
+```
+
+Plot the oosRMSE by model complexity (df in model)
+
+```{r}
+pacman::p_load(ggplot2)
+ggplot(data.frame(p = p_vec, oos_se = oos_se_select)) + geom_line(aes(x = p, y = oos_se))
+```
+
+Select the best model by oosRMSE and find its oosRMSE on the test set.
+
+```{r}
+best_m = which.min(oos_se_select)
+best_mod = lm(model_formulas[best_m], data = rbind(diamonds_train, diamonds_select))
+preds_test = predict(best_mod, newdata = diamonds_test)
+sd(diamonds_test$price - preds_test)
+```
+
+Did we overfit the select set? Discuss why or why not.
+
+# No, we chose from models that were already specified.
+
+Create the final model object `g_final`.
+
+```{r}
+g_final = lm(model_formulas[best_m], data = diamonds_cleaned)
+```
+
+
+#Model Selection with Three Splits: Hyperparameter selection
+
+We will use an algorithm that I historically taught in 324W but now moved to 343 so I can teach it more deeply using the Bayesian topics from 341. The regression algorithm is called "ridge" and it involves solving for the slope vector via:
+
+b_ridge := (X^T X + lambda I_(p+1))^-1 X^T y
+
+Note how if lambda = 0, this is the same algorithm as OLS. If lambda becomes very large then b_ridge is pushed towards all zeroes. So ridge is good at weighting only features that matter.
+
+However, lambda is a hyperparameter >= 0 that needs to be selected.
+
+We will work with the boston housing dataset except we will add 250 garbage features consisting of iid N(0,1) realizations. We will also standardize the columns so they're all xbar = 0 and s_x = 1. This is shown to be important in 343.
+
+```{r}
+rm(list = ls())
+?MASS::Boston
+y = MASS::Boston$medv
+X = model.matrix(medv ~ ., MASS::Boston)
+n = nrow(X)
+p_garbage = 250
+set.seed(1)
+X = cbind(X, matrix(rnorm(n * p_garbage), nrow = n))
+X = apply(X, 2, function(x_dot_j){
+                  (x_dot_j - mean(x_dot_j)) / sd(x_dot_j)
+                })
+X[, 1] = 1 #we standardized the intercept column which became zeroes - make it an intercept again
+dim(X)
+```
+
+
+Now we split it into 300 train, 100 select and 106 test. 
+
+```{r}
+set.seed(1)
+train_idx = sample(1 : n, 300)
+select_idx = sample(setdiff(1 : n, train_idx), 100)
+test_idx = setdiff(1 : n, c(train_idx, select_idx))
+
+X_train  = X[train_idx, ]
+y_train  = y[train_idx]
+X_select = X[select_idx, ]
+y_select = y[select_idx]
+X_test   = X[test_idx, ]
+y_test   = y[test_idx]
+```
+
+We now create a grid of M = 200 models indexed by lambda. The lowest lambda should be zero (which is OLS) and the highest lambda can be 100.
+
+```{r}
+M = 200
+lambda_grid = seq(from = 0, to = 100, length.out = M)
+```
+
+Now find the oosRMSE on the select set on all models each with their own lambda value.
+
+```{r}
+oos_se_select = c()
+
+for (m in 1:M){
+  lambda = lambda_grid[m]
+  p = ncol(X_train)
+  b_ridge = solve(t(X_train) %*% X_train + lambda * diag(p)) %*% t(X_train) %*% y_train
+  preds = X_select %*% b_ridge
+  oos_se_select[m] = sd(y_select - preds)
+}
+```
+
+Plot the oosRMSE by the value of lambda.
+
+```{r}
+ggplot(data.frame(lambda = lambda_grid, oos_se = oos_se_select)) + geom_line(aes(x = lambda, y = oos_se))
+```
+
+Select the model with the best oosRMSE on the select set and find its oosRMSE on the test set.
+
+```{r}
+best_m = which.min(oos_se_select)
+best_lambda = lambda_grid[best_m]
+b_ridge_final = solve(t(X_select) %*% X_select + best_lambda * diag(ncol(X_select))) %*% t(X_select) %*% y_select # Claude help
+preds_test = X_test %*% b_ridge_final
+sd(y_test - preds_test)
+```
+
+Create the final model object `g_final`.
+
+```{r}
+g_final = solve(t(X) %*% X + best_lambda * diag(ncol(X))) %*% t(X) %*% y
+```
+
+
+#Model Selection with Three Splits: Forward stepwise modeling
+
+We will use the adult data
+
+```{r}
+rm(list = ls())
+pacman::p_load_gh("coatless/ucidata") #load from github
+data(adult)
+adult = na.omit(adult) #remove any observations with missingness
+n = nrow(adult)
+?adult
+#let's remove "education" as its duplicative with education_num
+adult$education = NULL
+```
+
+
+To implement forward stepwise, we need a "full model" that contains anything and everything we can possible want to use as transformed predictors. Let's first create log features of all the numeric features. Instead of pure log, use log(value + 1) to handle possible zeroes.
+
+```{r}
+skimr::skim(adult)
+#this gives us the list of numeric features to create logs
+adult$log_age = log(adult$age + 1)
+adult$log_fnlwgt = log(adult$fnlwgt + 1)
+adult$log_education_num = log(adult$education_num + 1)
+adult$log_capital_gain = log(adult$capital_gain + 1)
+adult$log_capital_loss = log(adult$capital_loss + 1)
+adult$log_hours_per_week = log(adult$hours_per_week + 1)
+```
+
+Now let's create a model matrix Xfull that contains all first order interactions. How many degrees of freedom in this "full model"?
+
+```{r}
+Xfull = model.matrix(income ~ .^2, adult)
+ncol(Xfull) - 1
+```
+
+Now let's split it into train, select and test sets. Because this will be a glm, model-building (training) will be slow, so let's keep the training set small at 2,000. Since prediction is fast, we can divide the others evenly among select and test.
+
+```{r}
+y = ifelse(adult$income == ">50K", 1, 0)
+
+set.seed(1)
+train_idx  = sample(1:n, 2000)
+remaining  = setdiff(1:n, train_idx)
+select_idx = sample(remaining, round(length(remaining) / 2))
+test_idx   = setdiff(remaining, select_idx)
+
+Xfull_train =  Xfull[train_idx, ]
+Xfull_select = Xfull[select_idx, ]
+Xfull_test =   Xfull[test_idx, ]
+y_train =      y[train_idx]
+y_select =     y[select_idx]
+y_test =       y[test_idx]
+```
+
+Now let's use the code from class to run the forward stepwise modeling. As this is binary classification, let's use logistic regression and to measure model performance, let's use the Brier score. Compute the Brier score in-sample (on training set) and oos (on selection set) for every iteration of j, the number of features selected from the greedy selection procedure.
+
+```{r}
+# Forward stepwise
+included_features_by_iter = c()
+in_sample_brier_by_iteration = c()
+oos_brier_by_iteration = c()
+
+for (i in 1:50){
+  all_briers = array(NA, ncol(Xfull_train))
+  for (j_try in 1:ncol(Xfull_train)){
+    if (j_try %in% included_features_by_iter){ next }
+    Xmm_sub = Xfull_train[, c(included_features_by_iter, j_try), drop = FALSE]
+    glm_mod = glm.fit(Xmm_sub, y_train, family = binomial(link = "logit"))
+    p_hat = 1 / (1 + exp(-(Xmm_sub %*% glm_mod$coefficients)))
+    all_briers[j_try] = mean((y_train - p_hat)^2)
+  }
+  j_star = which.min(all_briers)
+  included_features_by_iter = c(included_features_by_iter, j_star)
+  in_sample_brier_by_iteration = c(in_sample_brier_by_iteration, all_briers[j_star])
+  
+  Xmm_sub = Xfull_train[, included_features_by_iter, drop = FALSE]
+  mod = glm.fit(Xmm_sub, y_train, family = binomial(link = "logit"))
+  p_hat_select = 1 / (1 + exp(-Xfull_select[, included_features_by_iter, drop = FALSE] %*% mod$coefficients))
+  oos_brier_by_iteration = c(oos_brier_by_iteration, mean((y_select - p_hat_select)^2))
+}
+# Getting errors Warning: glm.fit: fitted probabilities numerically 0 or 1 occurred and Error : object 'lambda_grid' not found. Attempted to fix with Claude, didn't work.
+```
+
+Plot the in-sample Brier score (in red) and oos Brier score (in blue) by the number of features used.
+
+```{r}
+ggplot(data.frame(j = 1:50, in_sample = in_sample_brier_by_iteration, oos = oos_brier_by_iteration)) +
+  geom_line(aes(x = j, y = in_sample), col = "red") +
+  geom_line(aes(x = j, y = oos), col = "blue")
+```
+
+Select the model with the best oos Brier score on the select set and find its oos Brier score on the test set.
+
+```{r}
+best_m = which.min(oos_brier_by_iteration)
+best_features = included_features_by_iter[1:best_m]
+mod_best = glm.fit(Xfull_train[, best_features, drop = FALSE], y_train, family = binomial(link = "logit")) # used glm.fit because of earlier limiting to 50
+p_hat_test = 1 / (1 + exp(-Xfull_test[, best_features, drop = FALSE] %*% mod_best$coefficients))
+mean((y_test - p_hat_test)^2)
+```
+
+Create the final model object `g_final`.
+
+```{r}
+g_final = glm(c(y_train, y_select) ~ rbind(Xfull_train, Xfull_select)[, best_features] - 1, family = binomial)
+```
