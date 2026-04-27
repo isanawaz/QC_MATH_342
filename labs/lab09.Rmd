@@ -1,0 +1,487 @@
+---
+title: "Lab 9"
+author: "Isa Nawaz"
+output: pdf_document
+---
+
+
+#Rcpp and optimizing R
+
+Write a function `dot_product_R` in R that takes in two vectors `v1` and `v2` and returns their dot product.
+
+```{r}
+dot_product_R = function(v1, v2){
+  sum(v1 * v2)
+}
+```
+
+Write a function `dot_product_cpp` in C++ and make sure it compiles.
+
+```{r}
+pacman::p_load(Rcpp)
+cppFunction('
+  double dot_product_cpp(NumericVector v1, NumericVector v2) {
+    int n = v1.size();
+    double result = 0;
+    for (int i = 0; i < n; i++){
+      result += v1[i] * v2[i];
+    }
+    return result;
+  }
+')
+```
+
+Create two vectors of standard normal realizations with length `n=1e6` and test the different in speed.
+
+```{r}
+n = 1e6
+v1 = rnorm(n)
+v2 = rnorm(n)
+
+pacman::p_load(microbenchmark)
+microbenchmark(
+  dot_product_R(v1, v2), 
+  dot_product_cpp(v1, v2),
+  times = 10
+)
+```
+
+Implement the Gram Schmidt routine as a C++ function `gram_schmidt_cpp`.
+
+```{r}
+cppFunction('
+  NumericMatrix gram_schmidt_cpp(NumericMatrix X) {
+    int n = X.nrow();
+    int p = X.ncol();
+    NumericMatrix V(n, p);
+    
+    for (int i = 0; i < n; i++){
+      V(i, 0) = X(i, 0);
+    }
+    
+    for (int j = 1; j < p; j++){
+      for (int i = 0; i < n; i++){
+        V(i, j) = X(i, j);
+      }
+      for (int k = 0; k < j; k++){
+        double dot_num = 0;
+        double dot_den = 0;
+        for (int i = 0; i < n; i++){
+          dot_num += V(i, k) * X(i, j);
+          dot_den += V(i, k) * V(i, k);
+        }
+        double proj = dot_num / dot_den;
+        for (int i = 0; i < n; i++){
+          V(i, j) -= proj * V(i, k);
+        }
+      }
+    }
+    
+    NumericMatrix Q(n, p);
+    for (int j = 0; j < p; j++){
+      double norm = 0;
+      for (int i = 0; i < n; i++){
+        norm += V(i, j) * V(i, j);
+      }
+      norm = sqrt(norm);
+      for (int i = 0; i < n; i++){
+        Q(i, j) = V(i, j) / norm;
+      }
+    }
+    return Q;
+  }
+')
+
+# Claude help
+```
+
+Here is the implementation in R for reference taken from lab 5:
+
+```{r}
+gram_schmidt_R = function(X){
+  #first create orthogonal matrix
+  V = matrix(NA, nrow = nrow(X), ncol = ncol(X))
+  V[, 1] = X[, 1]
+  
+  for (j in 2 : ncol(X)){
+    V[, j] = X[, j]
+    
+    for (k in 1 : (j-1)){
+      v_k = V[, k, drop = FALSE]
+      V[, j] = V[, j, drop = FALSE] - (t(t(v_k)) %*% t(v_k) / sum(v_k^2)) %*% t(t(X[, j])) #i.e. the orthogonal projection of X[, j] onto v_k
+    }
+  }
+  
+  Q = matrix(NA, nrow = nrow(X), ncol = ncol(X))
+  for (j in 1 : ncol(X)){
+    Q[, j] = V[, j] / sqrt(sum(V[, j]^2))
+  }
+  Q
+}
+```
+
+Now let's see how much faster C++ is by running it on the boston housing data design matrix
+```{r}
+X = model.matrix(medv ~ ., MASS::Boston)
+
+microbenchmark(
+  gram_schmidt_R(X),
+  gram_schmidt_cpp(X),
+  times = 10
+)
+```
+
+Create a variable `n` to be 10 and a variable `Nvec` to be 100 initially. Create a random vector via `rnorm` `Nvec` times and load it into a `Nvec` x `n` dimensional matrix.
+
+```{r}
+n = 10
+Nvec = 100
+X = matrix(rnorm(Nvec * n), nrow = Nvec, ncol = n)
+```
+
+Write a function `all_angles` that measures the angle between each of the pairs of the `Nvec` vectors. You should measure the vector on a scale of 0 to 180 degrees with negative angles coerced to be positive.
+
+```{r}
+all_angles = function(X){
+  Nvec = nrow(X)
+  angles = c()
+  for (i1 in 1 : (Nvec - 1)){
+    for (i2 in (i1 + 1) : Nvec){
+      v1 = X[i1, ]
+      v2 = X[i2, ]
+      cos_angle = sum(v1 * v2) / (sqrt(sum(v1^2)) * sqrt(sum(v2^2)))
+      cos_angle = max(-1, min(1, cos_angle))
+      angles = c(angles, acos(cos_angle) * 180 / pi)
+    }
+  }
+  angles
+}
+
+# Claude help w/ calculations
+```
+
+Plot the density of these angles.
+
+```{r}
+pacman::p_load(ggplot2)
+ggplot(data.frame(angle = all_angles(X))) +
+  aes(x = angle) +
+  geom_density()
+```
+
+Write an Rcpp function `all_angles_cpp` that does the same thing. Use an IDE if you want, but write it below in-line.
+
+```{r}
+cppFunction('
+  NumericVector all_angles_cpp(NumericMatrix X) {
+    int Nvec = X.nrow();
+    int n = X.ncol();
+    NumericVector angles;
+    
+    for (int i1 = 0; i1 < Nvec - 1; i1++){
+      for (int i2 = i1 + 1; i2 < Nvec; i2++){
+        double dot = 0, norm1 = 0, norm2 = 0;
+        for (int j = 0; j < n; j++){
+          dot   += X(i1, j) * X(i2, j);
+          norm1 += X(i1, j) * X(i1, j);
+          norm2 += X(i2, j) * X(i2, j);
+        }
+        double cos_angle = dot / (sqrt(norm1) * sqrt(norm2));
+        if (cos_angle >  1) cos_angle =  1;
+        if (cos_angle < -1) cos_angle = -1;
+        angles.push_back(acos(cos_angle) * 180.0 / M_PI);
+      }
+    }
+    return angles;
+  }
+')
+
+# Claude help
+```
+
+Test the time difference between these functions for `n = 1000` and `Nvec = 100, 500, 1000, 5000` using the package `microbenchmark`.  Store the results in a matrix with rows representing `Nvec` and two columns for base R and Rcpp.
+
+```{r}
+n = 1000
+Nvecs = c(100, 500, 1000, 5000)
+results_for_time = data.frame(
+  Nvec = Nvecs,
+  time_for_base_R = numeric(length(Nvecs)),
+  time_for_cpp = numeric(length(Nvecs))
+)
+for (i in 1 : length(Nvecs)){
+  X = matrix(rnorm(n * Nvecs[i]), nrow = Nvecs[i], ncol = n)
+  mb = microbenchmark(
+    all_angles(X),
+    all_angles_cpp(X),
+    times = 3
+  )
+  results_for_time$time_for_base_R[i] = mean(mb$time[mb$expr == "all_angles(X)"])
+  results_for_time$time_for_cpp[i] = mean(mb$time[mb$expr == "all_angles_cpp(X)"])
+}
+ggplot(results_for_time) + 
+  geom_line(aes(x = Nvec, y = time_for_base_R), col = "red") +
+  geom_line(aes(x = Nvec, y = time_for_cpp), col = "blue")
+```
+
+Plot the divergence of performance (in log seconds) over n using a line geometry. Use two different colors for the R and CPP functions. Make sure there's a color legend on your plot. We wil see later how to create "long" matrices that make such plots easier.
+
+```{r}
+ggplot(results_for_time) +
+  geom_line(aes(x = Nvec, y = log(time_for_base_R / 1e9), col = "Base R")) +
+  geom_line(aes(x = Nvec, y = log(time_for_cpp / 1e9), col = "Rcpp")) +
+  scale_color_manual(values = c("Base R" = "red", "Rcpp" = "blue")) +
+  ylab("log(seconds)") +
+  xlab("Nvec")
+```
+
+Let `Nvec = 10000` and vary `n` to be 10, 100, 1000. Plot the density of angles for all three values of `n` on one plot using color to signify `n`. Make sure you have a color legend. This is not easy.
+
+```{r}
+Nvec = 10000
+ns = c(10, 100, 1000)
+all_data = data.frame()
+for (n_val in ns){
+  X = matrix(rnorm(Nvec * n_val), nrow = Nvec, ncol = n_val)
+  angles = all_angles_cpp(X)
+  all_data = rbind(all_data, data.frame(angle = angles, n = as.factor(n_val)))
+}
+ggplot(all_data) +
+  aes(x = angle, col = n) +
+  geom_density() +
+  xlab("Angle (degrees)")
+```
+
+Write an R function `nth_fibonnaci` that finds the nth Fibonnaci number via recursion but allows you to specify the starting number. For instance, if the sequence started at 1, you get the familiar 1, 1, 2, 3, 5, etc. But if it started at 0.01, you would get 0.01, 0.01, 0.02, 0.03, 0.05, etc.
+
+```{r}
+nth_fibonnaci = function(n, start = 1){
+  if (n == 1 || n == 2){
+    return(start)
+  }
+  nth_fibonnaci(n - 1, start) + nth_fibonnaci(n - 2, start)
+}
+```
+
+Write an Rcpp function `nth_fibonnaci_cpp` that does the same thing. Use an IDE if you want, but write it below in-line.
+
+```{r}
+cppFunction('
+  double nth_fibonnaci_cpp(int n, double start) {
+    if (n == 1 || n == 2){
+      return start;
+    }
+    return nth_fibonnaci_cpp(n - 1, start) + nth_fibonnaci_cpp(n - 2, start);
+  }
+')
+```
+
+Time the difference in these functions for n = 100, 200, ...., 1500 while starting the sequence at the smallest possible floating point value in R. Store the results in a matrix.
+
+```{r}
+fib_ns = seq(100, 1500, by = 100)
+start_val = .Machine$double.xmin
+fib_results = data.frame(
+  n = fib_ns,
+  time_R = numeric(length(fib_ns)),
+  time_cpp = numeric(length(fib_ns))
+)
+for (i in 1 : length(fib_ns)){
+  mb = microbenchmark(
+    nth_fibonnaci(fib_ns[i], start_val),
+    nth_fibonnaci_cpp(fib_ns[i], start_val),
+    times = 10
+  )
+  fib_results$time_R[i] = mean(mb$time[mb$expr == "nth_fibonnaci(fib_ns[i], start_val)"])
+  fib_results$time_cpp[i] = mean(mb$time[mb$expr == "nth_fibonnaci_cpp(fib_ns[i], start_val)"])
+}
+```
+
+Plot the divergence of performance (in log seconds) over n using a line geometry. Use two different colors for the R and CPP functions. Make sure there's a color legend on your plot.
+
+```{r}
+ggplot(fib_results) +
+  aes(x = n) +
+  geom_line(aes(y = log(time_R / 1e9), col = "Base R")) +
+  geom_line(aes(y = log(time_cpp / 1e9), col = "Rcpp")) +
+  scale_color_manual(values = c("Base R" = "red", "Rcpp" = "blue")) +
+  ylab("log(seconds)") +
+  xlab("n")
+```
+
+
+#YARF setup
+
+For the next couple of labs, I want you to make some use of a package I wrote that offers convenient and flexible tree-building and random forest-building. Make sure you have a JDK installed first
+
+https://www.oracle.com/java/technologies/downloads/
+
+Then try to install rJava
+
+```{r}
+options(java.parameters = "-Xmx4000m")
+pacman::p_load(rJava)
+.jinit()
+```
+
+If you have error, messages, try to google them. Everyone has trouble with rJava!
+
+If that worked, please try to run the following which will install YARF from my github:
+
+```{r}
+if (!pacman::p_isinstalled(YARF)){
+  pacman::p_install_gh("kapelner/YARF/YARFJARs", ref = "dev")
+  pacman::p_install_gh("kapelner/YARF/YARF", ref = "dev", force = TRUE)
+}
+pacman::p_load(YARF)
+```
+
+Please try to fix the error messages (if they exist) as best as you can. I can help on slack.
+
+
+
+# Regression Trees
+
+You can use the `YARF` package if it works, otherwise, use the `randomForest` package (the canonical R package for this algorithm).
+
+Let's take a look at a simulated sine curve. Below is the code for the data generating process:
+
+```{r}
+rm(list = ls())
+n_train = 500
+sigma = 0.3
+x_min = 0
+x_max = 10
+x = runif(n_train, x_min, x_max)
+
+f_x = function(x){sin(x)}
+x_train = runif(n_train, x_min, x_max)
+y_train = f_x(x) + rnorm(n_train, 0, sigma)
+```
+
+Plot an example dataset of size 500:
+
+```{r}
+n_test = 500
+ggplot(data.frame(x = x_train, y = y_train)) +
+  aes(x = x, y = y) +
+  geom_point(alpha = 0.3)
+```
+
+Create a test set of size 500 from this data generating process:
+
+```{r}
+x_test = runif(n_test, x_min, x_max)
+y_test = f_x(x_test) + rnorm(n_test, 0, sigma)
+```
+
+Locate the optimal node size hyperparameter for the regression tree model. I believe you can use `randomForest` here by setting `ntree = 1`, `replace = FALSE`, `sampsize = n` (`mtry` is already set to be 1 because there is only one feature) and then you can set `nodesize`. Plot nodesize by out of sample s_e. Plot.
+
+```{r}
+pacman::p_load(randomForest)
+nodesizes = seq(1, 200, by = 5)
+se_by_nodesize = numeric(length(nodesizes))
+for (i in 1 : length(nodesizes)){
+  rf_mod = randomForest(
+    x = data.frame(x = x_train),
+    y = y_train,
+    ntree = 1,
+    replace = FALSE,
+    sampsize = n_train,
+    nodesize = nodesizes[i]
+  )
+  y_hat_test = predict(rf_mod, data.frame(x = x_test))
+  se_by_nodesize[i] = sd(y_test - y_hat_test)
+}
+optimal_nodesize = nodesizes[which.min(se_by_nodesize)]
+optimal_nodesize
+ggplot(data.frame(nodesize = nodesizes, se = se_by_nodesize)) +
+  aes(x = nodesize, y = se) +
+  geom_point() +
+  geom_line()
+
+# Claude help
+```
+
+Plot the regression tree model g(x) with the optimal node size.
+
+```{r}
+rf_mod_optimal = randomForest(
+  x = data.frame(x = x_train),
+  y = y_train,
+  ntree = 1,
+  replace = FALSE,
+  sampsize = n_train,
+  nodesize = optimal_nodesize
+)
+x_plot = seq(x_min, x_max, length.out = 500)
+ggplot(data.frame(x = x_plot, y = predict(rf_mod_optimal, data.frame(x = x_plot)))) +
+  aes(x = x, y = y) +
+  geom_line(col = "red") +
+  geom_point(data = data.frame(x = x_train, y = y_train), aes(x = x, y = y), alpha = 0.3)
+
+# Claude help
+```
+
+Find the oosRMSE of this optimal-node-size model.
+
+```{r}
+y_hat_test = predict(rf_mod_optimal, data.frame(x = x_test))
+oosRMSE = sqrt(mean((y_test - y_hat_test)^2))
+oosRMSE
+```
+
+# Regression Trees
+
+You can use the `YARF` package if it works, otherwise, use the `randomForest` package (the canonical R package for this algorithm).
+
+Let's take a look at a simulated sine curve. Below is the code for the data generating process:
+
+```{r}
+rm(list = ls())
+n = 500
+sigma = 0.3
+x_min = 0
+x_max = 10
+x = runif(n, x_min, x_max)
+
+f_x = function(x){sin(x)}
+x = runif(n, x_min, x_max)
+y = f_x(x) + rnorm(n, 0, sigma)
+```
+
+Provide the bias-variance decomposition of this DGP fit with the tree model fitted with the optimal N_0 from the previous lab. It is a lot of code, but it is in the practice lectures. If your three numbers don't add up within two significant digits, increase your resolution.
+
+```{r}
+pacman::p_load(YARF)
+
+n_test = 500
+x_test = runif(n_test, x_min, x_max)
+y_test = f_x(x_test) + rnorm(n_test, 0, sigma)
+
+nodesizes = seq(1, 200, by = 5)
+se_by_nodesize = numeric(length(nodesizes))
+for (i in 1 : length(nodesizes)){
+  tree_mod = YARFCART(data.frame(x = x), y, nodesize = nodesizes[i], calculate_oob_error = FALSE)
+  se_by_nodesize[i] = sd(y_test - predict(tree_mod, data.frame(x = x_test)))
+}
+optimal_nodesize = nodesizes[which.min(se_by_nodesize)]
+
+num_simulations = 500
+all_g_hats = matrix(NA, nrow = n_test, ncol = num_simulations)
+for (s in 1 : num_simulations){
+  x_train = runif(n, x_min, x_max)
+  y_train = f_x(x_train) + rnorm(n, 0, sigma)
+  tree_mod = YARFCART(data.frame(x = x_train), y_train, nodesize = optimal_nodesize, calculate_oob_error = FALSE)
+  all_g_hats[, s] = predict(tree_mod, data.frame(x = x_test))
+}
+
+g_bar = rowMeans(all_g_hats)
+bias_sq = mean((f_x(x_test) - g_bar)^2)
+variance = mean(apply(all_g_hats, 1, var))
+irreducible_error = sigma^2
+bias_sq
+variance
+irreducible_error
+bias_sq + variance + irreducible_error
+```
