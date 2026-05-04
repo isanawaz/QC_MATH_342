@@ -133,7 +133,10 @@ asymmetric_predictions_results = tibble(
   recall = NA, 
   F1 = NA, 
   FDR = NA, 
-  FOR = NA
+  FOR = NA,
+  FP = NA,
+  FN = NA,
+  FPR = NA
 )
 
 p_hats = predict(glm_mod, adult_test, type = "response")
@@ -154,6 +157,9 @@ for (i in 1 : nrow(asymmetric_predictions_results)){
   asymmetric_predictions_results$F1[i]        = 2 * tp / (2 * tp + fp + fn)
   asymmetric_predictions_results$FDR[i]       = fp / (tp + fp)
   asymmetric_predictions_results$FOR[i]       = fn / (tn + fn)
+  asymmetric_predictions_results$FP[i]        = fp
+  asymmetric_predictions_results$FN[i]        = fn
+  asymmetric_predictions_results$FPR[i] = fp / (fp + tn)
 }
 # Error "factor ___ has new levels ___"
 # Some Claude help
@@ -164,31 +170,62 @@ for (i in 1 : nrow(asymmetric_predictions_results)){
 Calculate the column `total_cost` and append it to this data frame via `mutate`.
 
 ```{r}
-#TO-DO
+fp_cost = 1
+fn_cost = 5
+asymmetric_predictions_results = asymmetric_predictions_results |>
+  mutate(total_cost = fp_cost * FP + fn_cost * FN)
 ```
 
 Which is the lowest total cost? What is the "winning" probability threshold value providing that minimum total cost?
 
 ```{r}
-#TO-DO
+asymmetric_predictions_results[which.min(asymmetric_predictions_results$total_cost), ]
 ```
 
 Plot an ROC curve in-sample and interpret.
 
 ```{r}
-#TO-DO
+p_hats_train = predict(glm_mod, adult_train, type = "response")
+y_train = adult_train$income
+
+asymmetric_predictions_results_train = tibble(
+  p_hat_threshold = seq(from = 0.001, to = 0.999, by = 0.001),
+  recall = NA,
+  FPR = NA
+)
+
+for (i in 1 : nrow(asymmetric_predictions_results_train)){
+  p_hat_threshold = asymmetric_predictions_results_train$p_hat_threshold[i]
+  y_hat = factor(ifelse(p_hats_train >= p_hat_threshold, ">50K", "<=50K"), levels = levels(y_train))
+  
+  tp = sum(y_hat == ">50K" & y_train == ">50K")
+  fp = sum(y_hat == ">50K" & y_train == "<=50K")
+  tn = sum(y_hat == "<=50K" & y_train == "<=50K")
+  fn = sum(y_hat == "<=50K" & y_train == ">50K")
+  
+  asymmetric_predictions_results_train$recall[i] = tp / (tp + fn)
+  asymmetric_predictions_results_train$FPR[i]    = fp / (fp + tn)
+}
+
+ggplot(asymmetric_predictions_results_train) +
+  geom_line(aes(x = FPR, y = recall)) +
+  geom_abline(intercept = 0, slope = 1) +
+  coord_fixed() + xlim(0, 1) + ylim(0, 1)
 ```
 
-#TO-DO interpretation
+# The model is much better than random guessing. It correctly identifies more >50K earners while keeping the false positive rate low.
 
 
 Plot an ROC curve oos and interpret.
 
 ```{r}
-#TO-DO
+ggplot(asymmetric_predictions_results) +
+  geom_line(aes(x = FPR, y = recall)) +
+  geom_abline(intercept = 0, slope = 1) +
+  coord_fixed() + xlim(0, 1) + ylim(0, 1)
 ```
 
-#TO-DO interpretation
+# Slightly worse, to be expected.
 
 
 #YARF
