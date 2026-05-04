@@ -1,0 +1,430 @@
+---
+title: "Lab 10"
+author: "Isa Nawaz"
+output: pdf_document
+---
+
+
+
+# Classification Trees
+
+Let's get the letter recognition data from the `mlbench` package.
+
+```{r}
+rm(list = ls())
+pacman::p_load(mlbench)
+data(LetterRecognition, package = "mlbench")
+n = nrow(LetterRecognition)
+skimr::skim(LetterRecognition)
+```
+
+This dataset has 20,000 examples. Create a training-select-test split so that they each have 1,000 observations.
+
+```{r}
+set.seed(1)
+train_idx = sample(1 : n, 1000)
+select_idx = sample(setdiff(1 : n, train_idx), 1000)
+test_idx = sample(setdiff(1 : n, c(train_idx, select_idx)), 1000)
+letters_train = LetterRecognition[train_idx, ]
+letters_select = LetterRecognition[select_idx, ]
+letters_test = LetterRecognition[test_idx, ]
+```
+
+Find the optimal classification tree by using the model selection algorithm to optimize the nodesize hyperparameter. Use misclassification error as the performance metric.
+
+```{r}
+if (!pacman::p_isinstalled(YARF)){
+  pacman::p_install_gh("kapelner/YARF/YARFJARs", ref = "dev")
+  pacman::p_install_gh("kapelner/YARF/YARF", ref = "dev", force = TRUE)
+}
+pacman::p_load(YARF)
+
+nodesizes = seq(1, 20, by = 1)
+misclassification_errs = array(NA, length(nodesizes))
+for (m in 1 : length(nodesizes)){
+  tree_mod = YARFCART(letters_train[, -1], letters_train[, 1], nodesize = nodesizes[m])
+  misclassification_errs[m] = mean(letters_select[, 1] != predict(tree_mod, letters_select[, -1]))
+}
+```
+
+Plot the oos misclassification error by nodesize.
+
+```{r}
+ggplot(data.frame(nodesize = nodesizes, misclassification_error = misclassification_errs)) + 
+  aes(x = nodesize, y = misclassification_error) +
+  geom_point() + 
+  geom_line()
+```
+
+Construct the optimal classification tree on the union of train set and select set. Then estimate generalization error on test set. Save `y_hat_test` as we'll need it later.
+
+```{r}
+train_select_idx = c(train_idx, select_idx)
+letters_train_select = LetterRecognition[train_select_idx, ]
+
+opt_nodesize = nodesizes[which.min(misclassification_errs)]
+tree_mod_opt = YARFCART(letters_train_select[, -1], letters_train_select[, 1], nodesize = opt_nodesize)
+
+y_hat_test = predict(tree_mod_opt, letters_test[, -1])
+mean(letters_test[, 1] != y_hat_test)
+```
+
+Print out the top of the tree so we can have some level of interpretation to how the model g is predicting.
+
+```{r}
+illustrate_trees(tree_mod_opt, max_depth = 5, length_in_px_per_half_split = 30, open_file = TRUE)
+```
+
+Create a "confusion matrix". This means it shows every predicted level (which is a letter in our case) and every actual level. Here you'll see every type of error e.g. "P was predicted but the real letter is H", "M was predicted but the real letter is N" etc. This is really easy: one call to the `table` function is all you need.
+
+```{r}
+table(predicted = y_hat_test, actual = letters_test[, 1])
+```
+
+Which errors are most prominent in this model?
+
+# The most common errors are amongst letter with similar shapes.
+
+# Asymmetric Cost Modeling, ROC and DET curves
+
+Load the adult dataset and impute the missing data using the `missForest` package.
+
+```{r}
+pacman::p_load_gh("coatless/ucidata")
+data(adult)
+n = nrow(adult)
+
+pacman::p_load(missForest)
+adult = adult |> dplyr::mutate(across(where(is.character), as.factor)) # "Must be factor or numeric" error.
+adult = missForest(adult)$ximp
+```
+
+Then sample training and testing sets each of size 2,000:
+
+```{r}
+n_subset = 2000
+index_train = sample.int(n, n_subset, replace = FALSE)
+index_test = sample(setdiff(1 : n, index_train), n_subset, replace = FALSE)
+adult_train = droplevels(adult[index_train, ])
+adult_test = adult[index_test, ]
+for (col in names(which(sapply(adult_train, is.factor)))){
+  adult_test[[col]] = factor(as.character(adult_test[[col]]), levels = levels(adult_train[[col]]))
+}
+adult_test = na.omit(adult_test)
+
+# Error "factor ___ has new levels ___" filtering
+```
+
+
+Fit a logistic regression model to the adult_train missingness-imputed data.
+
+```{r}
+glm_mod = glm(income ~ ., adult_train, family = binomial)
+```
+
+Use the function from class to calculate all the error metrics (misclassification error, precision, recall, F1, FDR, FOR) for the values of the probability threshold being 0.001, 0.002, ..., 0.999 in a tibble (dplyr data frame).
+
+```{r}
+pacman::p_load(tidyverse)
+asymmetric_predictions_results = tibble(
+  p_hat_threshold = seq(from = 0.001, to = 0.999, by = 0.001),
+  misclassification_error = NA, 
+  precision = NA, 
+  recall = NA, 
+  F1 = NA, 
+  FDR = NA, 
+  FOR = NA
+)
+
+p_hats = predict(glm_mod, adult_test, type = "response")
+y_test = adult_test$income
+
+for (i in 1 : nrow(asymmetric_predictions_results)){
+  p_hat_threshold = asymmetric_predictions_results$p_hat_threshold[i]
+  y_hat = factor(ifelse(p_hats >= p_hat_threshold, ">50K", "<=50K"), levels = levels(y_test))
+  
+  tp = sum(y_hat == ">50K" & y_test == ">50K")
+  fp = sum(y_hat == ">50K" & y_test == "<=50K")
+  tn = sum(y_hat == "<=50K" & y_test == "<=50K")
+  fn = sum(y_hat == "<=50K" & y_test == ">50K")
+  
+  asymmetric_predictions_results$misclassification_error[i] = (fp + fn) / (tp + fp + tn + fn)
+  asymmetric_predictions_results$precision[i] = tp / (tp + fp)
+  asymmetric_predictions_results$recall[i]    = tp / (tp + fn)
+  asymmetric_predictions_results$F1[i]        = 2 * tp / (2 * tp + fp + fn)
+  asymmetric_predictions_results$FDR[i]       = fp / (tp + fp)
+  asymmetric_predictions_results$FOR[i]       = fn / (tn + fn)
+}
+# Error "factor ___ has new levels ___"
+# Some Claude help
+```
+
+
+# Not clear on what the total_cost is supposed to be
+Calculate the column `total_cost` and append it to this data frame via `mutate`.
+
+```{r}
+#TO-DO
+```
+
+Which is the lowest total cost? What is the "winning" probability threshold value providing that minimum total cost?
+
+```{r}
+#TO-DO
+```
+
+Plot an ROC curve in-sample and interpret.
+
+```{r}
+#TO-DO
+```
+
+#TO-DO interpretation
+
+
+Plot an ROC curve oos and interpret.
+
+```{r}
+#TO-DO
+```
+
+#TO-DO interpretation
+
+
+#YARF
+
+For the next couple of labs, I want you to make some use of a package I wrote that offers convenient and flexible tree-building and random forest-building. Make sure you have RTools installed (if you're on windows) and then a JDK installed:
+
+https://www.oracle.com/java/technologies/downloads/
+
+Then try to install rJava
+
+```{r}
+options(java.parameters = "-Xmx8000m")
+pacman::p_load(rJava)
+.jinit()
+```
+
+If you have error, messages, try to google them. Everyone has trouble with rJava!
+
+If that worked, please try to run the following which will install YARF from my github:
+
+```{r}
+if (!pacman::p_isinstalled(YARF)){
+  pacman::p_install_gh("kapelner/YARF/YARFJARs", ref = "dev")
+  pacman::p_install_gh("kapelner/YARF/YARF", ref = "dev", force = TRUE)
+}
+pacman::p_load(YARF)
+```
+
+Please try to fix the error messages (if they exist) as best as you can. I can help on slack.
+
+
+
+#Bagged Trees and Random Forest
+
+Take a training sample of n = 2000 observations from the diamonds data.
+
+```{r}
+rm(list = ls())
+pacman::p_load(tidyverse)
+set.seed(1)
+diamonds_train = ggplot2::diamonds %>% 
+  sample_n(2000)
+```
+
+
+Using the diamonds data, find the oob s_e for a bagged-tree model using 1, 2, 5, 10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000 trees. If you are using the `randomForest` package, you can create the bagged tree model via setting an argument within the RF constructor function. Plot.
+
+```{r}
+num_trees_values = c(1, 2, 5, 10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000)
+oob_se_bagged_trees_mod_by_num_trees = array(NA, length(num_trees_values))
+for (m in 1 : length(num_trees_values)){
+  tree_mod = YARFBAG(diamonds_train[, -7], diamonds_train[, 7, drop = TRUE], num_trees = num_trees_values[m])
+  oob_se_bagged_trees_mod_by_num_trees[m] = tree_mod$rmse_oob
+}
+
+ggplot(data.frame(num_trees = num_trees_values, oob_rmse = oob_se_bagged_trees_mod_by_num_trees)) + 
+  aes(x = num_trees, y = oob_rmse) +
+  geom_point() + 
+  geom_line()
+```
+
+Find the bootstrap s_e for a RF model using 1, 2, 5, 10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000 trees. If you are using the `randomForest` package, you can calculate oob residuals via `e_oob = y_train - rf_mod$predicted`. Plot.
+
+```{r}
+oob_se_rf_mod_by_num_trees = array(NA, length(num_trees_values))
+for (m in 1 : length(num_trees_values)){
+  tree_mod = YARF(diamonds_train[, -7], diamonds_train[, 7, drop = TRUE], num_trees = num_trees_values[m])
+  oob_se_rf_mod_by_num_trees[m] = tree_mod$rmse_oob
+}
+
+ggplot(data.frame(num_trees = num_trees_values, oob_rmse = oob_se_rf_mod_by_num_trees)) + 
+  aes(x = num_trees, y = oob_rmse) +
+  geom_point() + 
+  geom_line()
+```
+
+What is the percentage gain / loss in performance of the RF model vs bagged trees model for each number of trees? Gains are negative (as in lower oos s_e).
+
+```{r}
+cbind(
+  num_trees_values,
+  (oob_se_rf_mod_by_num_trees - oob_se_bagged_trees_mod_by_num_trees) / oob_se_bagged_trees_mod_by_num_trees * 100
+)
+```
+
+Why was this the result?
+
+# The default mtry wasn't optimal for this dataset. We underfit a bit.
+
+Plot oob s_e by number of trees for both RF and bagged trees by creating a long data frame from the two results.
+
+```{r}
+ggplot(data.frame(
+  num_trees = rep(num_trees_values, 2),
+  oob_rmse = c(oob_se_bagged_trees_mod_by_num_trees, oob_se_rf_mod_by_num_trees),
+  model = rep(c("Bagged Trees", "RF"), each = length(num_trees_values))
+)) +
+  aes(x = num_trees, y = oob_rmse, color = model) +
+  geom_point() +
+  geom_line()
+```
+
+Build RF models for 500 trees using different `mtry` values: 1, 2, ... the maximum. That maximum will be the number of features assuming that we do not binarize categorical features if you are using `randomForest` or the number of features assuming binarization of the categorical features if you are using `YARF`. Calculate oob s_e for all mtry values.
+
+```{r}
+oob_se_by_mtry = array(NA, ncol(diamonds_train))
+for (m in 1 : 24){
+  rf_mod = YARF(diamonds_train[, -7], diamonds_train[, 7, drop = TRUE], num_trees = 500, mtry = m)
+  oob_se_by_mtry[m] = rf_mod$rmse_oob
+}
+
+# Error in YARF(diamonds_train[, -7], diamonds_train[, 7, drop = TRUE],  : Assertion on 'mtry <= p' failed: Must be TRUE.
+# changed to 24 based on max valid mtry
+```
+
+Plot oob s_e by mtry.
+
+```{r}
+ggplot(data.frame(mtry = 1 : 24, oob_rmse = oob_se_by_mtry)) +
+  aes(x = mtry, y = oob_rmse) +
+  geom_point() +
+  geom_line()
+```
+
+Take a sample of n = 2000 observations from the adult data and name it `adult_sample`. Then impute missing values using missForest (we will cover what this is later in.
+
+```{r}
+rm(list = ls())
+set.seed(1)
+pacman::p_load_gh("coatless/ucidata")
+pacman::p_load(tidyverse, missForest)
+adult = adult |> dplyr::mutate(across(where(is.character), as.factor))
+adult_train = adult %>% 
+  sample_n(2000)
+adult_train = missForest(adult_train)$ximp
+```
+
+
+Using the adult_train data, find the bootstrap misclassification error for a bagged-tree model using 1, 2, 5, 10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000 trees. Plot.
+
+```{r}
+num_trees_values = c(1, 2, 5, 10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000)
+oob_se_bagged_trees_mod_by_num_trees = array(NA, length(num_trees_values))
+
+for (m in 1 : length(num_trees_values)){
+  tree_mod = YARFBAG(adult_train[, -15], adult_train[, 15, drop = TRUE], num_trees = num_trees_values[m])
+  oob_se_bagged_trees_mod_by_num_trees[m] = tree_mod$misclassification_error
+}
+
+ggplot(data.frame(num_trees = num_trees_values, oob_misclass = oob_se_bagged_trees_mod_by_num_trees)) +
+  aes(x = num_trees, y = oob_misclass) +
+  geom_point() +
+  geom_line()
+```
+
+Using the adult_train data, find the bootstrap misclassification error for an RF model using 1, 2, 5, 10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000 trees.
+
+```{r}
+oob_se_rf_mod_by_num_trees = array(NA, length(num_trees_values))
+
+for (m in 1 : length(num_trees_values)){
+  tree_mod = YARF(adult_train[, -15], adult_train[, 15, drop = TRUE], num_trees = num_trees_values[m])
+  oob_se_rf_mod_by_num_trees[m] = tree_mod$misclassification_error
+}
+```
+
+What is the percentage gain / loss in performance of the RF model vs bagged trees model?
+
+```{r}
+cbind(
+  num_trees_values,
+  (oob_se_rf_mod_by_num_trees - oob_se_bagged_trees_mod_by_num_trees) / oob_se_bagged_trees_mod_by_num_trees * 100
+)
+```
+
+Build RF models on adult_train for 500 trees using different `mtry` values: 1, 2, ... the maximum (see above as maximum is defined by the specific RF algorithm implementation). 
+
+```{r}
+oob_se_by_mtry = array(NA, ncol(adult_train))
+
+for (m in 1 : ncol(adult_train)){
+  tryCatch({
+    tree_mod = YARF(adult_train[, -15], adult_train[, 15, drop = TRUE], num_trees = 500, mtry = m)
+    oob_se_by_mtry[m] = tree_mod$misclassification_error
+  }, error = function(e) NULL)
+}
+```
+
+
+Plot bootstrap misclassification error by `mtry`.
+
+```{r}
+ggplot(data.frame(mtry = 1 : ncol(adult_train), oob_misclass = oob_se_by_mtry)) +
+  aes(x = mtry, y = oob_misclass) +
+  geom_point() +
+  geom_line()
+```
+
+Is `mtry` an important hyperparameter to optimize when using the RF algorithm? Explain
+
+# Yes, the error clearly drops at mtry increases.
+
+Identify the best model among all values of `mtry`. Fit this RF model. Then report the following oob error metrics: misclassification error, precision, recall, F1, FDR, FOR and compute a confusion matrix.
+
+```{r}
+best_mtry = which.min(oob_se_by_mtry)
+rf_mod_best = YARF(adult_train[, -15], adult_train[, 15, drop = TRUE], num_trees = 500, mtry = best_mtry)
+
+y_hat_oob = rf_mod_best$y_oob
+y_train = adult_train[, 15, drop = TRUE]
+
+tp = sum(y_hat_oob == ">50K" & y_train == ">50K")
+fp = sum(y_hat_oob == ">50K" & y_train == "<=50K")
+tn = sum(y_hat_oob == "<=50K" & y_train == "<=50K")
+fn = sum(y_hat_oob == "<=50K" & y_train == ">50K")
+
+cat("misclassification error:", (fp + fn) / (tp + fp + tn + fn), "\n")
+cat("precision:", tp / (tp + fp), "\n")
+cat("recall:", tp / (tp + fn), "\n")
+cat("F1:", 2 * tp / (2 * tp + fp + fn), "\n")
+cat("FDR:", fp / (tp + fp), "\n")
+cat("FOR:", fn / (tn + fn), "\n")
+table(predicted = y_hat_oob, actual = y_train)
+
+# Claude help
+```
+
+Is this a good model? (yes/no and explain).
+
+# Not amazing, 15% misclassification isn't terrible, but recall is missing almost half of all >50K earners.
+
+There are probability asymmetric costs to the two types of errors. Assign two costs below and calculate oob total cost.
+
+```{r}
+fp_cost = 3
+fn_cost = 5
+total_cost = fp_cost * fp + fn_cost * fn
+total_cost
+```
